@@ -1,0 +1,113 @@
+services:
+  postgresdb:
+    image: 'postgres:15'
+    ports:
+      - '5436:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: fastfood-db
+    volumes:
+      - ./_data/postgres:/var/lib/postgresql/data
+    restart: always
+    networks:
+      - fastfood-network
+
+  redis:
+    image: 'redis:latest'
+    container_name: fastfood-redis
+    volumes:
+      - ./_data/redis:/data
+    ports:
+      - '6380:6379'
+    restart: always
+    networks:
+      - fastfood-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: fastfood-minio
+    restart: always
+    ports:
+      - '9000:9000' # API
+      - '9001:9001' # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./_data/minio:/usr/share/minio/data
+    command: server --console-address ":9001" /data
+    networks:
+      - fastfood-network
+
+  createbuckets:
+    image: minio/mc
+    container_name: fastfood-createbuckets
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb --ignore-existing myminio/fastfood;
+      /usr/bin/mc policy set public myminio/fastfood;
+      exit 0;
+      "
+    networks:
+      - fastfood-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.0
+    container_name: fastfood-elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - 'ES_JAVA_OPTS=-Xms512m -Xmx512m'
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - '9200:9200'
+    volumes:
+      - ./_data/elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - fastfood-network
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -s http://localhost:9200 || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.0
+    container_name: fastfood-kibana
+    environment:
+      ELASTICSEARCH_HOSTS: 'http://elasticsearch:9200'
+    ports:
+      - '5601:5601'
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - fastfood-network
+
+  redis-commander:
+    image: 'rediscommander/redis-commander:latest'
+    ports:
+      - "8082:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6380
+    restart: always
+    depends_on:
+      - redis
+    networks:
+      - fastfood-network
+
+networks:
+  fastfood-network:
+    driver: bridge
